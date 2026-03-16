@@ -2,3 +2,17 @@ name = "thesisParse"
 uuid = "ada85527-0014-421a-ba48-9ab40fa36dc5"
 version = "0.1.0"
 authors = ["Stijn Peeters <58211004+microstijn@users.noreply.github.com>"]
+
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+EzXML = "8f5d6c58-4d21-5cfd-889c-e3ad7ee6a615"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+URIs = "5c2747f8-b7ea-4ff2-ba2e-563bfd36b1d4"
+
+[compat]
+CSV = "0.10.16"
+DataFrames = "1.8.1"
+EzXML = "1.2.3"
+HTTP = "1.11.0"
+URIs = "1.6.1"
