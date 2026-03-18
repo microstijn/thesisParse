@@ -3,6 +3,65 @@ using EzXML
 using DataFrames
 using CSV
 using URIs
+using Gumbo
+using Cascadia
+
+function harvest_msc_theses(start_year::Int, end_year::Int)
+    df = DataFrame(Year=String[], Title=String[], Creator=String[], URL=String[])
+    base_url = "https://library.wur.nl/WebQuery/theses"
+
+    for year in start_year:end_year
+        offset = 0
+        while true
+            println("Fetching year $year, offset $offset...")
+
+            # The query parameters required for pagination and year filtering
+            url = "$base_url?q=*&wq_flt=jaar&wq_val=$year&wq_max=100&wq_ofs=$offset"
+
+            response = HTTP.get(url, status_exception=false)
+            if response.status != 200
+                println("Failed to fetch $url. Status code: $(response.status)")
+                break
+            end
+
+            body = String(response.body)
+            html = Gumbo.parsehtml(body)
+
+            records = eachmatch(Selector(".record_summary"), html.root)
+
+            if isempty(records)
+                break
+            end
+
+            for r in records
+                # Extract title and URL
+                title_el = eachmatch(Selector("a.title"), r)
+                title = isempty(title_el) ? "" : strip(text(title_el[1]))
+
+                href = ""
+                if !isempty(title_el)
+                    href = getattr(title_el[1], "href", "")
+                    if startswith(href, "/")
+                        href = "https://library.wur.nl" * href
+                    elseif !startswith(href, "http") && !isempty(href)
+                        href = "https://library.wur.nl/" * href
+                    end
+                end
+
+                # Extract creator
+                author_el = eachmatch(Selector(".author span"), r)
+                creator = isempty(author_el) ? "" : strip(text(author_el[1]))
+
+                push!(df, (string(year), title, creator, href))
+            end
+
+            offset += 100
+            sleep(1.0)
+        end
+    end
+
+    return df
+end
 
 function harvest_theses(; max_pages::Int=5, output_csv::String="theses_metadata.csv")
     base_url = "https://library.wur.nl/oai"
