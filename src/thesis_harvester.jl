@@ -118,12 +118,13 @@ function download_pdfs(df::DataFrame, output_dir::String)
 
         println("Checking URL: $url")
 
+        is_pdf = false
+        content_type = ""
         try
             # Check content type
             res = HTTP.head(url, redirect=true, status_exception=false)
 
             # Need to find Content-Type
-            content_type = ""
             for header in res.headers
                 if lowercase(header[1]) == "content-type"
                     content_type = lowercase(header[2])
@@ -132,13 +133,54 @@ function download_pdfs(df::DataFrame, output_dir::String)
             end
 
             if occursin("application/pdf", content_type)
+                is_pdf = true
                 println("Downloading to $filepath...")
                 HTTP.download(url, filepath)
-            else
-                println("Skipping $url - Content-Type is $content_type (not application/pdf)")
             end
         catch e
-            println("Error processing $url: $e")
+            println("Error processing initial URL $url: $e")
+        end
+
+        if !is_pdf
+            println("Original URL is not a PDF (Content-Type: $content_type). Fetching HTML...")
+            try
+                res_get = HTTP.get(url, redirect=true, status_exception=false)
+                html_string = String(res_get.body)
+
+                m = match(r"href=\"([^\"]+\.pdf)\"i", html_string)
+                if m !== nothing
+                    pdf_url = String(m.captures[1])
+                    if startswith(pdf_url, "http")
+                        # Leave it as is
+                    elseif startswith(pdf_url, "/")
+                        pdf_url = "https://research.wur.nl" * pdf_url
+                    else
+                        pdf_url = "https://research.wur.nl/" * pdf_url
+                    end
+
+                    println("Found PDF link: $pdf_url. Verifying...")
+
+                    res_head = HTTP.head(pdf_url, redirect=true, status_exception=false)
+                    pdf_content_type = ""
+                    for header in res_head.headers
+                        if lowercase(header[1]) == "content-type"
+                            pdf_content_type = lowercase(header[2])
+                            break
+                        end
+                    end
+
+                    if occursin("application/pdf", pdf_content_type)
+                        println("Downloading to $filepath...")
+                        HTTP.download(pdf_url, filepath)
+                    else
+                        println("Skipping $pdf_url - Content-Type is $pdf_content_type (not application/pdf)")
+                    end
+                else
+                    println("No PDF link found in HTML for $url")
+                end
+            catch e
+                println("Error processing HTML for $url: $e")
+            end
         end
 
         # Politeness
