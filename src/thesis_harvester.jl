@@ -5,6 +5,7 @@ using CSV
 using URIs
 using Gumbo
 using Cascadia
+using ProgressMeter
 
 function harvest_msc_theses(start_year::Int, end_year::Int)
     df = DataFrame(Year=String[], Title=String[], Creator=String[], URL=String[])
@@ -156,34 +157,39 @@ function sanitize_filename(title::String)
 end
 
 function download_pdfs(df::DataFrame, output_dir::String)
+    # Create the directory if it doesn't exist
     if !isdir(output_dir)
         mkdir(output_dir)
     end
 
-    for row in eachrow(df)
+    total_files = nrow(df)
+    error_log_path = joinpath(output_dir, "missed_urls.txt")
+    
+    # The @showprogress macro automatically handles the progress bar
+    @showprogress 1 "Downloading $total_files PDFs..." for row in eachrow(df)
         url = row.URL
-        if isempty(url)
+        if ismissing(url) || isempty(url)
             continue
         end
 
-        # Build filename
-        safe_title = sanitize_filename(row.Title)
-        year_str = isempty(row.Year) ? "UnknownYear" : row.Year
-        # Sanitize year string as it might contain full dates like 2023-05-12
+        # --- FIX 1: Safe Year and Title String Parsing ---
+        year_raw = ismissing(row.Year) ? "" : string(row.Year)
+        year_str = isempty(year_raw) ? "UnknownYear" : year_raw
         year_str = replace(year_str, r"[^a-zA-Z0-9\s_\-]" => "")
 
+        title_raw = ismissing(row.Title) ? "UnknownTitle" : string(row.Title)
+        safe_title = sanitize_filename(title_raw)
+        
         filename = "$(year_str)_$(safe_title).pdf"
         filepath = joinpath(output_dir, filename)
 
-        println("Checking URL: $url")
-
         is_pdf = false
         content_type = ""
+        
+        # 1st Attempt: Check if the direct URL is already a PDF or an eDepot link
         try
-            # Check content type
             res = HTTP.head(url, redirect=true, status_exception=false)
 
-            # Need to find Content-Type
             for header in res.headers
                 if lowercase(header[1]) == "content-type"
                     content_type = lowercase(header[2])
@@ -191,24 +197,28 @@ function download_pdfs(df::DataFrame, output_dir::String)
                 end
             end
 
-            if occursin("application/pdf", content_type)
+            # --- THE MAGIC FIX: Trust eDepot links automatically ---
+            if occursin("application/pdf", content_type) || occursin("edepot.wur.nl", lowercase(url))
                 is_pdf = true
-                println("Downloading to $filepath...")
                 HTTP.download(url, filepath)
             end
         catch e
-            println("Error processing initial URL $url: $e")
+            # Silenced to protect progress bar
         end
 
+        # 2nd Attempt: If direct link wasn't a PDF, scan the HTML page
         if !is_pdf
-            println("Original URL is not a PDF (Content-Type: $content_type). Fetching HTML...")
             try
                 res_get = HTTP.get(url, redirect=true, status_exception=false)
                 html_string = String(res_get.body)
 
-                m = match(r"href=\"([^\"]+\.pdf)\"i", html_string)
+                # --- FIX 2: Updated Regex to catch WUR eDepot links ---
+                m = match(r"href=\"([^\"]+\.pdf|https?://edepot\.wur\.nl/\d+)\"i", html_string)
+                
                 if m !== nothing
                     pdf_url = String(m.captures[1])
+                    
+                    # Fix relative URLs
                     if startswith(pdf_url, "http")
                         # Leave it as is
                     elseif startswith(pdf_url, "/")
@@ -217,8 +227,7 @@ function download_pdfs(df::DataFrame, output_dir::String)
                         pdf_url = "https://research.wur.nl/" * pdf_url
                     end
 
-                    println("Found PDF link: $pdf_url. Verifying...")
-
+                    # Verify the found link
                     res_head = HTTP.head(pdf_url, redirect=true, status_exception=false)
                     pdf_content_type = ""
                     for header in res_head.headers
@@ -228,21 +237,29 @@ function download_pdfs(df::DataFrame, output_dir::String)
                         end
                     end
 
-                    if occursin("application/pdf", pdf_content_type)
-                        println("Downloading to $filepath...")
+                    # Download if it's a PDF OR if it's an eDepot link (which sometimes hide their headers)
+                    if occursin("application/pdf", pdf_content_type) || occursin("edepot", pdf_url)
                         HTTP.download(pdf_url, filepath)
                     else
-                        println("Skipping $pdf_url - Content-Type is $pdf_content_type (not application/pdf)")
+                        # --- FIX 3: Error Logging ---
+                        open(error_log_path, "a") do file
+                            write(file, "Found link but not a PDF ($pdf_content_type): $url -> $pdf_url\n")
+                        end
                     end
                 else
-                    println("No PDF link found in HTML for $url")
+                    # --- FIX 3: Error Logging ---
+                    open(error_log_path, "a") do file
+                        write(file, "No PDF or eDepot link found on page: $url\n")
+                    end
                 end
             catch e
-                println("Error processing HTML for $url: $e")
+                 open(error_log_path, "a") do file
+                    write(file, "Error fetching HTML for $url: $e\n")
+                end
             end
         end
 
-        # Politeness
-        sleep(1.5)
+        # Politeness constraint to prevent server blocks
+        sleep(1.0)
     end
 end

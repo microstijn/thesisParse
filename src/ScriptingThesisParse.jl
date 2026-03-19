@@ -9,9 +9,24 @@ using thesisParse
 
 fold = raw"C:\Users\peete074\Downloads\temp_try"
 
-outfile = joinpath(fold, "theses_metadata.csv")
+# set up your variables
+start_year = 1992
+end_year = 2026
+fold = raw"C:\Users\peete074\Downloads\temp_try"
+outfile = joinpath(fold, "msc_theses_metadata.csv")
 
-harvest_theses(
-    max_pages  = 10,
-    output_csv = outfile
-)
+# harvest the MSc theses
+println("Harvesting MSc theses from $start_year to $end_year...")
+df_msc = harvest_msc_theses(start_year, end_year)
+
+# save the resulting DataFrame to a CSV
+using CSV
+CSV.write(outfile, df_msc)
+
+using DataFrames
+dat = CSV.File(outfile) |> DataFrame 
+
+pdf_out_dir = joinpath(fold, "pdfs")
+
+download_pdfs(dat, pdf_out_dir)
+
