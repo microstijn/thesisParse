@@ -184,56 +184,83 @@ function batch_process_theses_concurrent(pdf_dir::String, output_jsonl::String, 
 
     mkpath(xml_dir)
 
+    # Collect already processed filenames
+    processed_files = Set{String}()
+    if isfile(output_jsonl)
+        for line in eachline(output_jsonl)
+            if !isempty(strip(line))
+                try
+                    data = JSON3.read(line)
+                    if haskey(data, :filename)
+                        push!(processed_files, String(data[:filename]))
+                    elseif haskey(data, "filename")
+                        push!(processed_files, String(data["filename"]))
+                    end
+                catch
+                    # Ignore malformed JSON lines
+                end
+            end
+        end
+    end
+
     pdf_files = filter(f -> endswith(lowercase(f), ".pdf"), readdir(pdf_dir, join=true))
 
     my_io_lock = ReentrantLock()
 
-    open(output_jsonl, "a") do io
-        open(error_log, "a") do err_io
-            asyncmap(pdf_files; ntasks=max_concurrent) do filepath
-                try
-                    # Memory Throttle
-                    while Sys.free_memory() / (1024^3) < min_free_mem_gb
-                        free_mem_gb = round(Sys.free_memory() / (1024^3), digits=2)
-                        println("Memory low ($free_mem_gb GB free). Worker pausing...")
-                        sleep(2.0)
-                    end
+    asyncmap(pdf_files; ntasks=max_concurrent) do filepath
+        file_basename = basename(filepath)
+        if file_basename in processed_files
+            println("Skipping already processed: $(file_basename)")
+            return
+        end
 
-                    xml_string = process_pdf_with_grobid(filepath)
-                    if isnothing(xml_string)
-                        msg = "Skipping file due to GROBID processing failure: $filepath\n"
-                        @warn msg
-                        lock(my_io_lock) do
-                            print(err_io, msg)
-                            flush(err_io)
-                        end
-                        return
-                    end
+        try
+            # Memory Throttle
+            while Sys.free_memory() / (1024^3) < min_free_mem_gb
+                free_mem_gb = round(Sys.free_memory() / (1024^3), digits=2)
+                println("Memory low ($free_mem_gb GB free). Worker pausing...")
+                sleep(2.0)
+            end
 
-                    # Save raw XML
-                    base_name = splitext(basename(filepath))[1]
-                    xml_filepath = joinpath(xml_dir, base_name * ".xml")
-                    write(xml_filepath, xml_string)
-
-                    parsed_data = parse_tei_xml(xml_string)
-
-                    # Add filename to the dictionary
-                    parsed_data["filename"] = basename(filepath)
-
-                    # Write to JSONLines safely
-                    lock(my_io_lock) do
-                        JSON3.write(io, parsed_data)
-                        println(io) # Add newline for JSONL format
-                        flush(io) # Save progress incrementally
-                    end
-
-                catch e
-                    msg = "Failed to process and parse file: $filepath. Error: $e\n"
-                    @warn msg
-                    lock(my_io_lock) do
+            xml_string = process_pdf_with_grobid(filepath)
+            if isnothing(xml_string)
+                msg = "Skipping file due to GROBID processing failure: $filepath\n"
+                @warn msg
+                lock(my_io_lock) do
+                    open(error_log, "a") do err_io
                         print(err_io, msg)
                         flush(err_io)
                     end
+                end
+                return
+            end
+
+            # Save raw XML
+            base_name = splitext(file_basename)[1]
+            xml_filepath = joinpath(xml_dir, base_name * ".xml")
+            write(xml_filepath, xml_string)
+
+            parsed_data = parse_tei_xml(xml_string)
+
+            # Add filename to the dictionary
+            parsed_data["filename"] = file_basename
+
+            # Write to JSONLines safely
+            lock(my_io_lock) do
+                open(output_jsonl, "a") do io
+                    JSON3.write(io, parsed_data)
+                    println(io) # Add newline for JSONL format
+                    flush(io) # Save progress incrementally
+                end
+            end
+
+        catch e
+            msg = "Failed to process and parse file: $filepath. Error: $e\n"
+            @warn msg
+            lock(my_io_lock) do
+                open(error_log, "a") do err_io
+                    print(err_io, msg)
+                    flush(err_io)
                 end
             end
         end
