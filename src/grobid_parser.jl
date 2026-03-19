@@ -5,7 +5,21 @@ using EzXML
 using JSON3
 using URIs
 
-export process_pdf_with_grobid, parse_tei_xml, batch_process_theses, batch_process_theses_concurrent
+export is_grobid_alive, process_pdf_with_grobid, parse_tei_xml, batch_process_theses, batch_process_theses_concurrent
+
+"""
+    is_grobid_alive(host::String="http://localhost:8070")
+
+Checks if the GROBID server is currently running and responding.
+"""
+function is_grobid_alive(host::String="http://localhost:8070")
+    try
+        response = HTTP.get("$host/api/isalive", status_exception=false, readtimeout=3)
+        return response.status == 200
+    catch
+        return false
+    end
+end
 
 """
     process_pdf_with_grobid(filepath::String; host="http://localhost:8070")
@@ -209,7 +223,10 @@ function batch_process_theses_concurrent(pdf_dir::String, output_jsonl::String, 
 
     asyncmap(pdf_files; ntasks=max_concurrent) do filepath
         file_basename = basename(filepath)
-        if file_basename in processed_files
+        base_name = splitext(file_basename)[1]
+
+        # Skip Check
+        if file_basename in processed_files || isfile(joinpath(xml_dir, base_name * ".xml")) || isfile(joinpath(xml_dir, base_name * ".failed"))
             println("Skipping already processed: $(file_basename)")
             return
         end
@@ -224,19 +241,25 @@ function batch_process_theses_concurrent(pdf_dir::String, output_jsonl::String, 
 
             xml_string = process_pdf_with_grobid(filepath)
             if isnothing(xml_string)
-                msg = "Skipping file due to GROBID processing failure: $filepath\n"
-                @warn msg
                 lock(my_io_lock) do
-                    open(error_log, "a") do err_io
-                        print(err_io, msg)
-                        flush(err_io)
+                    if is_grobid_alive()
+                        msg = "Skipping file due to GROBID processing failure: $filepath\n"
+                        @warn msg
+                        open(error_log, "a") do err_io
+                            print(err_io, msg)
+                            flush(err_io)
+                        end
+                        write(joinpath(xml_dir, base_name * ".failed"), "")
+                    else
+                        println("GROBID crashed. Restarting Docker...")
+                        run(`docker run -d --rm --init --ulimit core=0 -p 8070:8070 grobid/grobid:0.8.2-full`, wait=false)
+                        sleep(30)
                     end
                 end
                 return
             end
 
             # Save raw XML
-            base_name = splitext(file_basename)[1]
             xml_filepath = joinpath(xml_dir, base_name * ".xml")
             write(xml_filepath, xml_string)
 
@@ -255,12 +278,19 @@ function batch_process_theses_concurrent(pdf_dir::String, output_jsonl::String, 
             end
 
         catch e
-            msg = "Failed to process and parse file: $filepath. Error: $e\n"
-            @warn msg
             lock(my_io_lock) do
-                open(error_log, "a") do err_io
-                    print(err_io, msg)
-                    flush(err_io)
+                if is_grobid_alive()
+                    msg = "Failed to process and parse file: $filepath. Error: $e\n"
+                    @warn msg
+                    open(error_log, "a") do err_io
+                        print(err_io, msg)
+                        flush(err_io)
+                    end
+                    write(joinpath(xml_dir, base_name * ".failed"), "")
+                else
+                    println("GROBID crashed. Restarting Docker...")
+                    run(`docker run -d --rm --init --ulimit core=0 -p 8070:8070 grobid/grobid:0.8.2-full`, wait=false)
+                    sleep(30)
                 end
             end
         end
