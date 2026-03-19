@@ -90,10 +90,30 @@ function parse_tei_xml(xml_string::String)
         doi_node = findfirst(".//idno[@type='DOI']", bib)
         doi = isnothing(doi_node) ? nothing : strip(EzXML.nodecontent(doi_node))
 
+        author_nodes = findall(".//author//persName", bib)
+        if isempty(author_nodes)
+            authors = nothing
+        else
+            author_names = String[]
+            for node in author_nodes
+                # Clean up excess whitespace
+                clean_name = strip(replace(EzXML.nodecontent(node), r"\s+" => " "))
+                if !isempty(clean_name)
+                    push!(author_names, clean_name)
+                end
+            end
+            authors = isempty(author_names) ? nothing : join(author_names, "; ")
+        end
+
+        journal_node = findfirst(".//title[@level='j']", bib)
+        journal = isnothing(journal_node) ? nothing : strip(replace(EzXML.nodecontent(journal_node), r"\s+" => " "))
+
         push!(references, Dict(
             "title" => title,
             "year" => year,
-            "doi" => doi
+            "doi" => doi,
+            "authors" => authors,
+            "journal" => journal
         ))
     end
 

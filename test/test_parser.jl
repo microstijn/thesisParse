@@ -21,8 +21,18 @@ using .GrobidParser
                         <biblStruct>
                             <analytic>
                                 <title level="a" type="main">Test Title 1</title>
+                        <author>
+                            <persName>
+                                <forename>John</forename>
+                                <surname>Doe</surname>
+                            </persName>
+                        </author>
+                        <author>
+                            <persName>Jane  Smith</persName>
+                        </author>
                             </analytic>
                             <monogr>
+                        <title level="j">Journal of Testing</title>
                                 <imprint>
                                     <date type="published" when="2020-05-10" />
                                 </imprint>
@@ -58,14 +68,18 @@ using .GrobidParser
         # Should extract exactly 2 references
         @test length(refs) == 2
 
-        # First reference (with a-level title, when attribute, and DOI)
+        # First reference (with a-level title, when attribute, DOI, authors, and journal)
         @test refs[1]["title"] == "Test Title 1"
         @test refs[1]["year"] == "2020-05-10"
         @test refs[1]["doi"] == "10.1234/test.doi.1"
+        @test refs[1]["authors"] == "John Doe; Jane Smith"
+        @test refs[1]["journal"] == "Journal of Testing"
 
-        # Second reference (with m-level title, node text date, and NO DOI)
+        # Second reference (with m-level title, node text date, and NO DOI, NO authors, NO journal)
         @test refs[2]["title"] == "Test Book Title 2"
         @test refs[2]["year"] == "2021"
         @test refs[2]["doi"] === nothing
+        @test refs[2]["authors"] === nothing
+        @test refs[2]["journal"] === nothing
     end
 end
