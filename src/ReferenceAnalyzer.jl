@@ -3,8 +3,9 @@ module ReferenceAnalyzer
 using JSON3
 using DataFrames
 using CSV
+using Dates
 
-export extract_references
+export extract_references, parse_grobid_date, clean_dates!
 
 """
     extract_references(jsonl_path::String; csv_path::Union{String, Nothing}=nothing)
@@ -134,6 +135,48 @@ function extract_references(jsonl_path::String; csv_path::Union{String, Nothing}
         CSV.write(csv_path, df)
     end
 
+    return df
+end
+
+"""
+    parse_grobid_date(d_str::Union{String, Missing})::Union{Date, Missing}
+
+Parses a date string extracted by GROBID and converts it to a `Date` object safely.
+"""
+function parse_grobid_date(d_str::Union{String, Missing})::Union{Date, Missing}
+    if ismissing(d_str) || isempty(strip(d_str))
+        return missing
+    end
+
+    clean_str = strip(d_str)
+
+    # Define an array of DateFormats
+    formats = [dateformat"y-m-d", dateformat"y-m", dateformat"y"]
+
+    # Try Julia's native parsing
+    for fmt in formats
+        d = tryparse(Date, clean_str, fmt)
+        if d !== nothing
+            return d
+        end
+    end
+
+    # Fallback to finding a 4-digit year (1900-2099) using regex
+    m = match(r"\b(19\d{2}|20\d{2})\b", clean_str)
+    if m !== nothing
+        return Date(parse(Int, m.match))
+    end
+
+    return missing
+end
+
+"""
+    clean_dates!(df::DataFrame)
+
+Creates a new column in the DataFrame called `Parsed_Date` by safely parsing the `Ref_Date` column.
+"""
+function clean_dates!(df::DataFrame)
+    df.Parsed_Date = parse_grobid_date.(df.Ref_Date)
     return df
 end
 
